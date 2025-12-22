@@ -44,6 +44,26 @@ export default {
     const allowedOrigins = env.ALLOWED_ORIGINS?.split(",").map((o) =>
       o.trim()
     ) || ["*"];
+
+    // Validate origin/referer - block direct access
+    const origin = request.headers.get("Origin");
+    const referer = request.headers.get("Referer");
+    const refererOrigin = referer ? new URL(referer).origin : null;
+    const requestOrigin = origin || refererOrigin;
+
+    // Skip validation if wildcard allowed or it's a same-origin request (HLS segments)
+    const isAllowed =
+      allowedOrigins.includes("*") ||
+      (requestOrigin && allowedOrigins.includes(requestOrigin)) ||
+      (refererOrigin && refererOrigin === url.origin); // HLS segments have referer = pipe.sideby.me
+
+    if (!isAllowed) {
+      return Response.json(
+        { error: "Forbidden: requests must originate from allowed origins" },
+        { status: 403, headers: { "x-proxy-reason": "origin-blocked" } }
+      );
+    }
+
     const config: ProxyConfig = {
       ...DEFAULT_CONFIG,
       allowedOrigins,
