@@ -18,10 +18,11 @@ export interface ProxyResult {
 function buildForwardHeaders(
   targetUrl: URL,
   range?: string | null,
-  referer?: string | null
+  referer?: string | null,
+  clientUA?: string | null
 ): Record<string, string> {
   const headers: Record<string, string> = {
-    "User-Agent": "Mozilla/5.0 (compatible; SidebyProxy/1.0)",
+    "User-Agent": clientUA || "Mozilla/5.0 (compatible; SidebyProxy/1.0)",
     Accept: "*/*",
   };
 
@@ -31,11 +32,20 @@ function buildForwardHeaders(
   }
 
   // Set referer/origin for hotlink protection bypass
-  const refererUrl = referer || `${targetUrl.origin}/`;
-  headers["Referer"] = refererUrl;
-  try {
-    headers["Origin"] = new URL(refererUrl).origin;
-  } catch {
+  // If referer is provided, use it. Otherwise fallback to targetUrl origin
+  if (referer) {
+    try {
+      // Validate referer is a URL, but use it regardless of strict SSRF checks for now or just ensure it is well-formed
+      new URL(referer);
+      headers["Referer"] = referer;
+      headers["Origin"] = new URL(referer).origin;
+    } catch {
+      // Malformed referer fallback
+      headers["Referer"] = `${targetUrl.origin}/`;
+      headers["Origin"] = targetUrl.origin;
+    }
+  } else {
+    headers["Referer"] = `${targetUrl.origin}/`;
     headers["Origin"] = targetUrl.origin;
   }
 
@@ -164,11 +174,18 @@ export async function handleProxy(
 
   // Get safe referer
   const refererParam = url.searchParams.get("referer");
-  const safeReferer = await getSafeReferer(refererParam, targetUrl);
+
+  // Get User-Agent
+  const clientUA = request.headers.get("User-Agent");
 
   // Build forward headers
   const range = request.headers.get("Range");
-  const forwardHeaders = buildForwardHeaders(targetUrl, range, safeReferer);
+  const forwardHeaders = buildForwardHeaders(
+    targetUrl,
+    range,
+    refererParam,
+    clientUA
+  );
 
   // Fetch upstream
   let upstream: Response;
