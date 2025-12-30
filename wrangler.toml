@@ -4,4 +4,3 @@ compatibility_date = "2024-12-20"
 
 [vars]
 ALLOWED_ORIGINS = "https://watch.sideby.me,http://localhost:3000"
-LOGTAIL_SOURCE_TOKEN = "4jDiEkgfCufz6raLTbdikUCX"
