@@ -1,8 +1,16 @@
 // M3U8/HLS manifest rewrites segment and key URLs to go through the proxy
 
-// Create a proxy URL for a given target URL
-export function proxifyURL(targetUrl: string, proxyBaseUrl: string): string {
-  return `${proxyBaseUrl}?url=${encodeURIComponent(targetUrl)}`;
+// Create a proxy URL for a given target URL, optionally preserving headers
+export function proxifyURL(
+  targetUrl: string,
+  proxyBaseUrl: string,
+  preserveHeaders?: string
+): string {
+  const params = new URLSearchParams({ url: targetUrl });
+  if (preserveHeaders) {
+    params.set("headers", preserveHeaders);
+  }
+  return `${proxyBaseUrl}?${params.toString()}`;
 }
 
 // Check if a content-type indicates an M3U8/HLS manifest
@@ -27,6 +35,9 @@ export function rewriteM3U8(
 ): string {
   const lines = manifest.split(/\r?\n/);
 
+  // Extract headers from the original manifest URL to preserve for segments
+  const originalHeaders = baseUrl.searchParams.get("headers");
+
   return lines
     .map((line) => {
       const trimmed = line.trim();
@@ -40,7 +51,7 @@ export function rewriteM3U8(
         return line.replace(/URI="([^"]+)"/i, (_match, uri: string) => {
           try {
             const absolute = new URL(uri, baseUrl).toString();
-            return `URI="${proxifyURL(absolute, proxyBaseUrl)}"`;
+            return `URI="${proxifyURL(absolute, proxyBaseUrl, originalHeaders || undefined)}"`;
           } catch {
             return `URI="${uri}"`;
           }
@@ -53,7 +64,7 @@ export function rewriteM3U8(
       // Regular line = segment/playlist URL
       try {
         const absolute = new URL(trimmed, baseUrl).toString();
-        return proxifyURL(absolute, proxyBaseUrl);
+        return proxifyURL(absolute, proxyBaseUrl, originalHeaders || undefined);
       } catch {
         return line;
       }

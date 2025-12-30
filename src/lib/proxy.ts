@@ -32,16 +32,30 @@ function buildForwardHeaders(
     headers["Range"] = range;
   }
 
-  // Set referer/origin for hotlink protection bypass
-  // If referer is provided, use it. Otherwise fallback to targetUrl origin
-  if (referer) {
+  // Check for embedded headers in the target URL (e.g., ?headers={"referer":"..."})
+  // Some video sites embed required headers in the URL itself
+  let embeddedReferer: string | null = null;
+  let embeddedOrigin: string | null = null;
+  try {
+    const embeddedHeaders = targetUrl.searchParams.get("headers");
+    if (embeddedHeaders) {
+      const parsed = JSON.parse(embeddedHeaders);
+      embeddedReferer = parsed.referer || parsed.Referer || null;
+      embeddedOrigin = parsed.origin || parsed.Origin || null;
+    }
+  } catch {
+    // Ignore parse errors
+  }
+
+  // Priority: embedded headers > referer param > target origin fallback
+  const effectiveReferer = embeddedReferer || referer;
+
+  if (effectiveReferer) {
     try {
-      // Validate referer is a URL, but use it regardless of strict SSRF checks for now or just ensure it is well-formed
-      new URL(referer);
-      headers["Referer"] = referer;
-      headers["Origin"] = new URL(referer).origin;
+      new URL(effectiveReferer);
+      headers["Referer"] = effectiveReferer;
+      headers["Origin"] = embeddedOrigin || new URL(effectiveReferer).origin;
     } catch {
-      // Malformed referer fallback
       headers["Referer"] = `${targetUrl.origin}/`;
       headers["Origin"] = targetUrl.origin;
     }

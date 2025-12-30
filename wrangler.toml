@@ -3,4 +3,7 @@ main = "src/index.ts"
 compatibility_date = "2024-12-20"
 
 [vars]
-ALLOWED_ORIGINS = "https://watch.sideby.me,http://localhost:3000"
+ALLOWED_ORIGINS = "https://sideby.me,https://watch.sideby.me,http://localhost:3000"
+
+[observability]
+enabled = true
