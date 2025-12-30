@@ -1,8 +1,10 @@
 import { handleProxy, ProxyConfig } from "./lib/proxy";
+import { logProxyEvent } from "./lib/logger";
 
 export interface Env {
   ALLOWED_ORIGINS?: string;
   TRUSTED_HOSTS?: string;
+  LOGTAIL_SOURCE_TOKEN?: string;
 }
 
 // Configuration
@@ -76,7 +78,23 @@ export default {
     };
 
     // Handle proxy request
-    const { response } = await handleProxy(request, config);
+    const targetParam = url.searchParams.get("url");
+    const { response, proxyReason } = await handleProxy(request, config);
+
+    // Log proxy failures for debugging
+    if (
+      proxyReason !== "pass-through" &&
+      proxyReason !== "m3u8-rewrite" &&
+      proxyReason !== "range-synthesized"
+    ) {
+      logProxyEvent(env, {
+        source: "proxy-failure",
+        testedUrl: targetParam,
+        proxyReason,
+        upstreamStatus: response.headers.get("x-proxy-origin-status"),
+      });
+    }
+
     return response;
   },
 };
