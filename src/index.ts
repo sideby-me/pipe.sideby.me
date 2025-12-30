@@ -2,6 +2,7 @@ import { handleProxy, ProxyConfig } from "./lib/proxy";
 
 export interface Env {
   ALLOWED_ORIGINS?: string;
+  TRUSTED_HOSTS?: string;
 }
 
 // Configuration
@@ -45,6 +46,8 @@ export default {
       o.trim()
     ) || ["*"];
 
+    const trustedHosts = env.TRUSTED_HOSTS?.split(",").map((h) => h.trim());
+
     // Validate origin/referer - block direct access
     const origin = request.headers.get("Origin");
     const referer = request.headers.get("Referer");
@@ -69,6 +72,7 @@ export default {
       allowedOrigins,
       proxyBaseUrl: url.origin,
       maxContentLength: DEFAULT_CONFIG.maxContentLength!,
+      trustedHosts,
     };
 
     // Handle proxy request

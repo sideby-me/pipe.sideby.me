@@ -7,6 +7,7 @@ export interface ProxyConfig {
   allowedOrigins: string[];
   proxyBaseUrl: string;
   maxContentLength: number;
+  trustedHosts?: string[];
 }
 
 export interface ProxyResult {
@@ -161,7 +162,7 @@ export async function handleProxy(
   }
 
   // SSRF validation
-  const validation = await validateURL(targetUrl);
+  const validation = await validateURL(targetUrl, config.trustedHosts);
   if (!validation.valid) {
     return {
       response: Response.json(

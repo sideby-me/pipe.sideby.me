@@ -153,13 +153,26 @@ export async function resolveDNS(hostname: string): Promise<string[]> {
   }
 }
 
+// Check if a hostname is in the trusted list (suffix match)
+function isTrustedHost(hostname: string, trustedHosts?: string[]): boolean {
+  if (!trustedHosts || trustedHosts.length === 0) return false;
+  const lowerHost = hostname.toLowerCase();
+  return trustedHosts.some((trusted) => {
+    const lowerTrusted = trusted.toLowerCase();
+    return lowerHost === lowerTrusted || lowerHost.endsWith("." + lowerTrusted);
+  });
+}
+
 export interface ValidationResult {
   valid: boolean;
   error?: string;
 }
 
 // Validate a URL for SSRF protection
-export async function validateURL(url: URL): Promise<ValidationResult> {
+export async function validateURL(
+  url: URL,
+  trustedHosts?: string[]
+): Promise<ValidationResult> {
   // Protocol check
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     return { valid: false, error: "Invalid protocol" };
@@ -182,7 +195,14 @@ export async function validateURL(url: URL): Promise<ValidationResult> {
 
   // Resolve DNS and check all addresses
   const addresses = await resolveDNS(hostname);
+
   if (addresses.length === 0) {
+    if (isTrustedHost(hostname, trustedHosts)) {
+      console.warn(
+        `[ssrf] Trusted host DNS soft-fail: ${hostname} (${url.pathname})`
+      );
+      return { valid: true };
+    }
     return { valid: false, error: "DNS resolution failed" };
   }
 
