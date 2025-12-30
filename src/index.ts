@@ -4,7 +4,6 @@ import { logProxyEvent } from "./lib/logger";
 export interface Env {
   ALLOWED_ORIGINS?: string;
   TRUSTED_HOSTS?: string;
-  LOGTAIL_SOURCE_TOKEN?: string;
 }
 
 // Configuration
@@ -87,7 +86,7 @@ export default {
       proxyReason !== "m3u8-rewrite" &&
       proxyReason !== "range-synthesized"
     ) {
-      logProxyEvent(env, {
+      logProxyEvent({
         source: "proxy-failure",
         testedUrl: targetParam,
         proxyReason,
