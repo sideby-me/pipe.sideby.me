@@ -20,11 +20,13 @@ function buildForwardHeaders(
   targetUrl: URL,
   range?: string | null,
   referer?: string | null,
-  clientUA?: string | null
+  clientUA?: string | null,
+  clientAcceptLanguage?: string | null
 ): Record<string, string> {
   const headers: Record<string, string> = {
     "User-Agent": clientUA || "Mozilla/5.0 (compatible; SidebyProxy/1.0)",
     Accept: "*/*",
+    "Accept-Language": clientAcceptLanguage || "en-US,en;q=0.9",
   };
 
   // Add range header if provided
@@ -47,14 +49,41 @@ function buildForwardHeaders(
     // Ignore parse errors
   }
 
-  // Priority: embedded headers > referer param > target origin fallback
-  const effectiveReferer = embeddedReferer || referer;
+  // Try to extract origin from URL path for CDN proxies like:
+  let pathExtractedOrigin: string | null = null;
+  if (targetUrl.hostname.includes("workers.dev")) {
+    const pathParts = targetUrl.pathname.split("/").filter(Boolean);
+    if (pathParts.length > 0) {
+      const firstPart = pathParts[0];
+      // Check if it looks like a domain (contains a dot, not a file extension)
+      if (
+        firstPart.includes(".") &&
+        !firstPart.match(/\.(m3u8|ts|mp4|jpg|png|ico|html|js|css)$/i)
+      ) {
+        pathExtractedOrigin = `https://${firstPart}`;
+      }
+    }
+  }
+
+  // Priority: embedded headers > path-extracted origin > referer param > target origin fallback
+  const effectiveReferer = embeddedReferer || pathExtractedOrigin || referer;
+  const effectiveOrigin =
+    embeddedOrigin || (pathExtractedOrigin ? pathExtractedOrigin : null);
+  const hasEmbeddedHeaders = !!embeddedReferer || !!embeddedOrigin;
 
   if (effectiveReferer) {
     try {
       new URL(effectiveReferer);
-      headers["Referer"] = effectiveReferer;
-      headers["Origin"] = embeddedOrigin || new URL(effectiveReferer).origin;
+      headers["Referer"] = effectiveReferer.endsWith("/")
+        ? effectiveReferer
+        : `${effectiveReferer}/`;
+
+      // Only send Origin when we have an explicit origin or when headers are not embedded-only.
+      const shouldSendOrigin =
+        !!effectiveOrigin || !hasEmbeddedHeaders || !!pathExtractedOrigin;
+      if (shouldSendOrigin) {
+        headers["Origin"] = effectiveOrigin || new URL(effectiveReferer).origin;
+      }
     } catch {
       headers["Referer"] = `${targetUrl.origin}/`;
       headers["Origin"] = targetUrl.origin;
@@ -199,7 +228,8 @@ export async function handleProxy(
     targetUrl,
     range,
     refererParam,
-    clientUA
+    clientUA,
+    request.headers.get("Accept-Language")
   );
 
   // Fetch upstream
