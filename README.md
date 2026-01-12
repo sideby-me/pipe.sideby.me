@@ -58,19 +58,6 @@ npm run tail     # View live logs
 npm run format   # Prettier format
 ```
 
-## Project Structure
-
-```
-├── src/
-│   ├── index.ts           # Worker entry point
-│   └── lib/
-│       ├── proxy.ts       # Core proxy logic
-│       ├── ssrf.ts        # SSRF protection (DoH + IP validation)
-│       └── m3u8.ts        # HLS manifest rewriting
-├── wrangler.toml          # Cloudflare config
-└── package.json
-```
-
 ## How It Works
 
 1. **Request comes in** with `?url=<target>`
