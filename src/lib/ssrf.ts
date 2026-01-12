@@ -1,4 +1,5 @@
 // SSRF Protection utilities for Cloudflare Workers
+import { logger } from "./logger";
 
 // Private IP ranges (IPv4)
 const PRIVATE_IPV4_RANGES = [
@@ -148,7 +149,7 @@ export async function resolveDNS(hostname: string): Promise<string[]> {
 
     return addresses;
   } catch (error) {
-    console.error("[ssrf] DoH resolution failed:", error);
+    logger.error("DoH resolution failed", { error: String(error) });
     return [];
   }
 }
@@ -198,9 +199,9 @@ export async function validateURL(
 
   if (addresses.length === 0) {
     if (isTrustedHost(hostname, trustedHosts)) {
-      console.warn(
-        `[ssrf] Trusted host DNS soft-fail: ${hostname} (${url.pathname})`
-      );
+      logger.warn(`Trusted host DNS soft-fail: ${hostname}`, {
+        path: url.pathname,
+      });
       return { valid: true };
     }
     return { valid: false, error: "DNS resolution failed" };

@@ -3,97 +3,15 @@
 import { validateURL } from "./ssrf";
 import { isM3U8ContentType, rewriteM3U8 } from "./m3u8";
 
-export interface ProxyConfig {
-  allowedOrigins: string[];
-  proxyBaseUrl: string;
-  maxContentLength: number;
-  trustedHosts?: string[];
-}
+import { ProxyConfig } from "./config";
+import { createCORSHeaders } from "./cors";
+import { buildForwardHeaders } from "./headers";
+import { logger } from "./logger";
+import { ProxyReason } from "./types";
 
 export interface ProxyResult {
   response: Response;
-  proxyReason: string;
-}
-
-// Build headers to forward to the upstream server
-function buildForwardHeaders(
-  targetUrl: URL,
-  range?: string | null,
-  referer?: string | null,
-  clientUA?: string | null,
-  clientAcceptLanguage?: string | null
-): Record<string, string> {
-  const headers: Record<string, string> = {
-    "User-Agent": clientUA || "Mozilla/5.0 (compatible; SidebyProxy/1.0)",
-    Accept: "*/*",
-    "Accept-Language": clientAcceptLanguage || "en-US,en;q=0.9",
-  };
-
-  // Add range header if provided
-  if (range) {
-    headers["Range"] = range;
-  }
-
-  // Check for embedded headers in the target URL (e.g., ?headers={"referer":"..."})
-  // Some video sites embed required headers in the URL itself
-  let embeddedReferer: string | null = null;
-  let embeddedOrigin: string | null = null;
-  try {
-    const embeddedHeaders = targetUrl.searchParams.get("headers");
-    if (embeddedHeaders) {
-      const parsed = JSON.parse(embeddedHeaders);
-      embeddedReferer = parsed.referer || parsed.Referer || null;
-      embeddedOrigin = parsed.origin || parsed.Origin || null;
-    }
-  } catch {
-    // Ignore parse errors
-  }
-
-  // Try to extract origin from URL path for CDN proxies like:
-  let pathExtractedOrigin: string | null = null;
-  if (targetUrl.hostname.includes("workers.dev")) {
-    const pathParts = targetUrl.pathname.split("/").filter(Boolean);
-    if (pathParts.length > 0) {
-      const firstPart = pathParts[0];
-      // Check if it looks like a domain (contains a dot, not a file extension)
-      if (
-        firstPart.includes(".") &&
-        !firstPart.match(/\.(m3u8|ts|mp4|jpg|png|ico|html|js|css)$/i)
-      ) {
-        pathExtractedOrigin = `https://${firstPart}`;
-      }
-    }
-  }
-
-  // Priority: embedded headers > path-extracted origin > referer param > target origin fallback
-  const effectiveReferer = embeddedReferer || pathExtractedOrigin || referer;
-  const effectiveOrigin =
-    embeddedOrigin || (pathExtractedOrigin ? pathExtractedOrigin : null);
-  const hasEmbeddedHeaders = !!embeddedReferer || !!embeddedOrigin;
-
-  if (effectiveReferer) {
-    try {
-      new URL(effectiveReferer);
-      headers["Referer"] = effectiveReferer.endsWith("/")
-        ? effectiveReferer
-        : `${effectiveReferer}/`;
-
-      // Only send Origin when we have an explicit origin or when headers are not embedded-only.
-      const shouldSendOrigin =
-        !!effectiveOrigin || !hasEmbeddedHeaders || !!pathExtractedOrigin;
-      if (shouldSendOrigin) {
-        headers["Origin"] = effectiveOrigin || new URL(effectiveReferer).origin;
-      }
-    } catch {
-      headers["Referer"] = `${targetUrl.origin}/`;
-      headers["Origin"] = targetUrl.origin;
-    }
-  } else {
-    headers["Referer"] = `${targetUrl.origin}/`;
-    headers["Origin"] = targetUrl.origin;
-  }
-
-  return headers;
+  proxyReason: ProxyReason;
 }
 
 // Validate the referer parameter for SSRF protection
@@ -113,64 +31,75 @@ async function getSafeReferer(
   }
 }
 
-// Perform the upstream fetch with retry logic
+// Perform the upstream fetch with secure redirect handling
 async function fetchUpstream(
   url: string,
   headers: Record<string, string>,
+  config: ProxyConfig,
   signal?: AbortSignal
 ): Promise<Response> {
-  const doFetch = (useRange: boolean) => {
-    const reqHeaders = { ...headers };
-    if (!useRange) delete reqHeaders["Range"];
-    return fetch(url, { headers: reqHeaders, redirect: "follow", signal });
-  };
+  let currentUrl = url;
+  let response: Response;
+  const maxRedirects = 5;
+  let redirectCount = 0;
 
-  // First attempt with range if provided
-  let response = await doFetch(!!headers["Range"]);
+  while (redirectCount < maxRedirects) {
+    // Validate current URL before fetching
+    const validation = await validateURL(
+      new URL(currentUrl),
+      config.trustedHosts
+    );
+    if (!validation.valid) {
+      throw new Error(`SSRF blocked during redirect: ${validation.error}`);
+    }
 
-  // Retry without Range if 403 (some WAFs block mid-file byte ranges)
-  if (response.status === 403 && headers["Range"]) {
-    response = await doFetch(false);
+    const doFetch = (useRange: boolean) => {
+      const reqHeaders = { ...headers };
+      if (!useRange) delete reqHeaders["Range"];
+      return fetch(currentUrl, {
+        headers: reqHeaders,
+        redirect: "manual",
+        signal,
+      });
+    };
+
+    response = await doFetch(!!headers["Range"]);
+
+    // Retry without Range if 403 (some WAFs block mid-file byte ranges)
+    if (response.status === 403 && headers["Range"]) {
+      response = await doFetch(false);
+    }
+
+    // Handle redirects
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
+      const location = response.headers.get("Location");
+      if (!location) break;
+
+      // Resolve relative URLs
+      currentUrl = new URL(location, currentUrl).toString();
+      redirectCount++;
+      continue;
+    }
+
+    // Attempt simple retry on failure if not a redirect
+    if ([401, 403, 502, 503, 504].includes(response.status)) {
+      // One retry with minimal headers
+      const retryResp = await fetch(currentUrl, {
+        headers: { "User-Agent": headers["User-Agent"], Accept: "*/*" },
+        redirect: "manual",
+        signal,
+      });
+      if ([301, 302, 303, 307, 308].includes(retryResp.status)) {
+        response = retryResp;
+        continue;
+      }
+      return retryResp;
+    }
+
+    return response;
   }
 
-  // Retry with minimal headers if blocked
-  if ([401, 403, 502, 503, 504].includes(response.status)) {
-    response = await fetch(url, {
-      headers: { "User-Agent": headers["User-Agent"], Accept: "*/*" },
-      redirect: "follow",
-      signal,
-    });
-  }
-
-  return response;
-}
-
-// Create CORS headers for the response
-function createCORSHeaders(
-  origin: string | null,
-  allowedOrigins: string[]
-): Record<string, string> {
-  const corsHeaders: Record<string, string> = {
-    "Access-Control-Allow-Methods": "GET, OPTIONS",
-    "Access-Control-Allow-Headers": "Range, Origin, Referer",
-    "Access-Control-Expose-Headers":
-      "Content-Range, Accept-Ranges, Content-Length",
-    Vary: "Origin, Range",
-  };
-
-  // Check if origin is allowed
-  if (
-    origin &&
-    (allowedOrigins.includes(origin) || allowedOrigins.includes("*"))
-  ) {
-    corsHeaders["Access-Control-Allow-Origin"] = origin;
-  } else if (allowedOrigins.length > 0) {
-    corsHeaders["Access-Control-Allow-Origin"] = allowedOrigins[0];
-  } else {
-    corsHeaders["Access-Control-Allow-Origin"] = "*";
-  }
-
-  return corsHeaders;
+  throw new Error("Too many redirects");
 }
 
 // Handle the video proxy request
@@ -224,13 +153,13 @@ export async function handleProxy(
 
   // Build forward headers
   const range = request.headers.get("Range");
-  const forwardHeaders = buildForwardHeaders(
-    targetUrl,
-    range,
-    refererParam,
-    clientUA,
-    request.headers.get("Accept-Language")
-  );
+  // Build forward headers
+  const forwardHeaders = buildForwardHeaders(targetUrl, {
+    range: request.headers.get("Range"),
+    referer: refererParam,
+    userAgent: clientUA,
+    acceptLanguage: request.headers.get("Accept-Language"),
+  });
 
   // Fetch upstream
   let upstream: Response;
@@ -238,17 +167,16 @@ export async function handleProxy(
     upstream = await fetchUpstream(
       targetUrl.toString(),
       forwardHeaders,
+      config,
       request.signal
     );
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Unknown fetch error";
-    console.error(
-      "[proxy] Fetch error:",
-      message,
-      "URL:",
-      targetUrl.toString().slice(0, 200)
-    );
+    logger.error("Fetch error", {
+      reason: message,
+      url: targetUrl.toString(),
+    });
     return {
       response: Response.json(
         { error: "Failed to fetch upstream video", detail: message },
@@ -322,7 +250,7 @@ export async function handleProxy(
         proxyReason: "m3u8-rewrite",
       };
     } catch (error) {
-      console.error("[proxy] M3U8 rewrite failed:", error);
+      logger.error("M3U8 rewrite failed", { error: String(error) });
     }
   }
 

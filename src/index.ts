@@ -1,15 +1,7 @@
-import { handleProxy, ProxyConfig } from "./lib/proxy";
-import { logProxyEvent } from "./lib/logger";
-
-export interface Env {
-  ALLOWED_ORIGINS?: string;
-  TRUSTED_HOSTS?: string;
-}
-
-// Configuration
-const DEFAULT_CONFIG: Partial<ProxyConfig> = {
-  maxContentLength: 5 * 1024 * 1024 * 1024, // 5GB
-};
+import { handleProxy } from "./lib/proxy";
+import { logger } from "./lib/logger";
+import { Env, parseConfig } from "./lib/config";
+import { handleOptions } from "./lib/cors";
 
 export default {
   async fetch(
@@ -19,17 +11,12 @@ export default {
   ): Promise<Response> {
     const url = new URL(request.url);
 
+    // Build config from environment
+    const config = parseConfig(env, url);
+
     // Handle CORS preflight
     if (request.method === "OPTIONS") {
-      return new Response(null, {
-        status: 204,
-        headers: {
-          "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "GET, OPTIONS",
-          "Access-Control-Allow-Headers": "Range, Origin, Referer",
-          "Access-Control-Max-Age": "86400",
-        },
-      });
+      return handleOptions(request, config.allowedOrigins);
     }
 
     // Only allow GET requests
@@ -42,14 +29,8 @@ export default {
       return Response.json({ status: "ok", service: "pipe.sideby.me" });
     }
 
-    // Build config from environment
-    const allowedOrigins = env.ALLOWED_ORIGINS?.split(",").map((o) =>
-      o.trim()
-    ) || ["*"];
-
-    const trustedHosts = env.TRUSTED_HOSTS?.split(",").map((h) => h.trim());
-
     // Validate origin/referer - block direct access
+    // This logic enforces that requests come from allowed origins (or are same-origin/HLS)
     const origin = request.headers.get("Origin");
     const referer = request.headers.get("Referer");
     const refererOrigin = referer ? new URL(referer).origin : null;
@@ -57,8 +38,8 @@ export default {
 
     // Skip validation if wildcard allowed or it's a same-origin request (HLS segments)
     const isAllowed =
-      allowedOrigins.includes("*") ||
-      (requestOrigin && allowedOrigins.includes(requestOrigin)) ||
+      config.allowedOrigins.includes("*") ||
+      (requestOrigin && config.allowedOrigins.includes(requestOrigin)) ||
       (refererOrigin && refererOrigin === url.origin); // HLS segments have referer = pipe.sideby.me
 
     if (!isAllowed) {
@@ -67,14 +48,6 @@ export default {
         { status: 403, headers: { "x-proxy-reason": "origin-blocked" } }
       );
     }
-
-    const config: ProxyConfig = {
-      ...DEFAULT_CONFIG,
-      allowedOrigins,
-      proxyBaseUrl: url.origin,
-      maxContentLength: DEFAULT_CONFIG.maxContentLength!,
-      trustedHosts,
-    };
 
     // Handle proxy request
     const targetParam = url.searchParams.get("url");
@@ -86,8 +59,7 @@ export default {
       proxyReason !== "m3u8-rewrite" &&
       proxyReason !== "range-synthesized"
     ) {
-      logProxyEvent({
-        source: "proxy-failure",
+      logger.warn("Proxy failure", {
         testedUrl: targetParam,
         proxyReason,
         upstreamStatus: response.headers.get("x-proxy-origin-status"),
