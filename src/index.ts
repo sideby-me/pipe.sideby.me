@@ -43,6 +43,15 @@ export default {
       (refererOrigin && refererOrigin === url.origin); // HLS segments have referer = pipe.sideby.me
 
     if (!isAllowed) {
+      logger.warn("Origin/referer blocked", {
+        origin,
+        referer,
+        refererOrigin,
+        requestOrigin,
+        url: request.url,
+        userAgent: request.headers.get("User-Agent"),
+        allowedOrigins: config.allowedOrigins,
+      });
       return Response.json(
         { error: "Forbidden: requests must originate from allowed origins" },
         { status: 403, headers: { "x-proxy-reason": "origin-blocked" } }
