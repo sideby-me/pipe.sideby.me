@@ -10,16 +10,13 @@ export function createCORSHeaders(
     Vary: "Origin, Range",
   };
 
-  // Check if origin is allowed
-  if (
-    origin &&
-    (allowedOrigins.includes(origin) || allowedOrigins.includes("*"))
-  ) {
-    corsHeaders["Access-Control-Allow-Origin"] = origin;
-  } else if (allowedOrigins.length > 0) {
-    corsHeaders["Access-Control-Allow-Origin"] = allowedOrigins[0];
-  } else {
+  const hasWildcard = allowedOrigins.includes("*");
+
+  // Only emit ACAO when the origin is explicitly allowed or wildcard is configured and don't fall back to an arbitrary allowed origin when the incoming origin
+  if (hasWildcard) {
     corsHeaders["Access-Control-Allow-Origin"] = "*";
+  } else if (origin && allowedOrigins.includes(origin)) {
+    corsHeaders["Access-Control-Allow-Origin"] = origin;
   }
 
   return corsHeaders;
