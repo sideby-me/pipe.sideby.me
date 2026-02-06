@@ -8,8 +8,8 @@ The `handleProxy` function is the heart of the worker:
 
 1. **Extract target URL** from `?url=` query parameter.
 2. **SSRF validation** — Call `validateUrl` to ensure the target hostname doesn't resolve to private IPs.
-3. **Build headers** — Use `buildProxyHeaders` to spoof User-Agent, Referer, and Origin so upstream servers accept the request.
-4. **Fetch upstream** — If the first attempt returns 403, retry with alternate headers (different User-Agent, no Referer).
+3. **Build headers** — Use `buildForwardHeaders` to send an honest User-Agent and optional pass-through Referer/Origin from the client.
+4. **Fetch upstream** — If the first attempt returns 403, retry with minimal headers.
 5. **Detect content type** — Determine if the response is an HLS manifest (`.m3u8`, `application/vnd.apple.mpegurl`) or a media file.
 6. **HLS rewrite** — If it's a manifest, pass the body to `rewriteM3U8` to replace segment/variant URLs with proxied versions.
 7. **Range synthesis** — If the client requests a byte range but upstream ignores it, slice the response body before returning.
@@ -17,11 +17,7 @@ The `handleProxy` function is the heart of the worker:
 
 ### Retry Strategy
 
-Some CDNs enforce hotlink protection; a 403 on the first attempt may succeed with:
-
-- A different User-Agent (mobile vs desktop).
-- Stripping the Referer/Origin.
-- Adding the target's own origin as Referer.
+When upstreams return 403, the proxy retries once with minimal headers to avoid request-specific blocks without spoofing.
 
 ## HLS Handling (`m3u8.ts`)
 
@@ -34,7 +30,11 @@ HLS manifests list URLs for media segments and variant playlists. `rewriteM3U8`:
    ```
 3. Relative URLs are resolved against the manifest's base URL first.
 
-This ensures that subsequent segment fetches also route through the proxy, maintaining header spoofing and CORS.
+This ensures that subsequent segment fetches also route through the proxy for consistent CORS and protocol handling.
+
+## Proxy URL Shape
+
+The proxy only accepts a `url` query parameter and does not accept embedded headers or referer parameters.
 
 ## Range Request Synthesis
 

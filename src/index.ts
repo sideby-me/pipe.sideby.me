@@ -36,11 +36,17 @@ export default {
     const refererOrigin = referer ? new URL(referer).origin : null;
     const requestOrigin = origin || refererOrigin;
 
+    const isLocalWorkerHost =
+      url.hostname === "localhost" ||
+      url.hostname === "127.0.0.1" ||
+      url.hostname === "[::1]";
+
     // Skip validation if wildcard allowed or it's a same-origin request (HLS segments)
     const isAllowed =
       config.allowedOrigins.includes("*") ||
       (requestOrigin && config.allowedOrigins.includes(requestOrigin)) ||
-      (refererOrigin && refererOrigin === url.origin); // HLS segments have referer = pipe.sideby.me
+      (refererOrigin && refererOrigin === url.origin) || // HLS segments have referer = pipe.sideby.me
+      (!requestOrigin && isLocalWorkerHost); // Local dev direct hits have no Origin/Referer
 
     if (!isAllowed) {
       logger.warn("Origin/referer blocked", {

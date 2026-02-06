@@ -14,29 +14,12 @@ export interface ProxyResult {
   proxyReason: ProxyReason;
 }
 
-// Validate the referer parameter for SSRF protection
-async function getSafeReferer(
-  rawReferer: string | null,
-  target: URL
-): Promise<string | null> {
-  if (!rawReferer) return null;
-
-  try {
-    const refUrl = new URL(rawReferer);
-    const validation = await validateURL(refUrl);
-    if (!validation.valid) return null;
-    return refUrl.toString();
-  } catch {
-    return null;
-  }
-}
-
 // Perform the upstream fetch with secure redirect handling
 async function fetchUpstream(
   url: string,
   headers: Record<string, string>,
   config: ProxyConfig,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<Response> {
   let currentUrl = url;
   let response: Response;
@@ -47,7 +30,7 @@ async function fetchUpstream(
     // Validate current URL before fetching
     const validation = await validateURL(
       new URL(currentUrl),
-      config.trustedHosts
+      config.trustedHosts,
     );
     if (!validation.valid) {
       throw new Error(`SSRF blocked during redirect: ${validation.error}`);
@@ -105,7 +88,7 @@ async function fetchUpstream(
 // Handle the video proxy request
 export async function handleProxy(
   request: Request,
-  config: ProxyConfig
+  config: ProxyConfig,
 ): Promise<ProxyResult> {
   const url = new URL(request.url);
   const targetParam = url.searchParams.get("url");
@@ -116,7 +99,7 @@ export async function handleProxy(
     return {
       response: Response.json(
         { error: "Missing url parameter" },
-        { status: 400 }
+        { status: 400 },
       ),
       proxyReason: "missing-param",
     };
@@ -139,26 +122,23 @@ export async function handleProxy(
     return {
       response: Response.json(
         { error: "Invalid or disallowed URL", detail: validation.error },
-        { status: 400 }
+        { status: 400 },
       ),
       proxyReason: "ssrf-blocked",
     };
   }
-
-  // Get safe referer
-  const refererParam = url.searchParams.get("referer");
 
   // Get User-Agent
   const clientUA = request.headers.get("User-Agent");
 
   // Build forward headers
   const range = request.headers.get("Range");
-  // Build forward headers
-  const forwardHeaders = buildForwardHeaders(targetUrl, {
+  const forwardHeaders = buildForwardHeaders({
     range: request.headers.get("Range"),
-    referer: refererParam,
+    referer: request.headers.get("Referer"),
     userAgent: clientUA,
     acceptLanguage: request.headers.get("Accept-Language"),
+    origin: request.headers.get("Origin"),
   });
 
   // Fetch upstream
@@ -168,7 +148,7 @@ export async function handleProxy(
       targetUrl.toString(),
       forwardHeaders,
       config,
-      request.signal
+      request.signal,
     );
   } catch (error) {
     const message =
@@ -180,7 +160,7 @@ export async function handleProxy(
     return {
       response: Response.json(
         { error: "Failed to fetch upstream video", detail: message },
-        { status: 502, headers: { "x-proxy-reason": "fetch-error" } }
+        { status: 502, headers: { "x-proxy-reason": "fetch-error" } },
       ),
       proxyReason: "fetch-error",
     };
@@ -189,7 +169,7 @@ export async function handleProxy(
   // Check response status
   if (!upstream.ok && upstream.status !== 206) {
     const headers = new Headers(
-      createCORSHeaders(origin, config.allowedOrigins)
+      createCORSHeaders(origin, config.allowedOrigins),
     );
     headers.set("x-proxy-reason", "upstream-error");
     headers.set("x-proxy-origin-status", String(upstream.status));
@@ -204,7 +184,7 @@ export async function handleProxy(
 
   // Prepare response headers
   const responseHeaders = new Headers(
-    createCORSHeaders(origin, config.allowedOrigins)
+    createCORSHeaders(origin, config.allowedOrigins),
   );
   const contentType =
     upstream.headers.get("content-type") || "application/octet-stream";
@@ -218,7 +198,7 @@ export async function handleProxy(
       return {
         response: Response.json(
           { error: "File too large" },
-          { status: 413, headers: { "x-proxy-reason": "size-limit" } }
+          { status: 413, headers: { "x-proxy-reason": "size-limit" } },
         ),
         proxyReason: "size-limit",
       };
@@ -232,13 +212,13 @@ export async function handleProxy(
       const rewritten = rewriteM3U8(
         manifestText,
         targetUrl,
-        config.proxyBaseUrl
+        config.proxyBaseUrl,
       );
 
       responseHeaders.set("Content-Type", "application/vnd.apple.mpegurl");
       responseHeaders.set(
         "Cache-Control",
-        upstream.headers.get("cache-control") || "public, max-age=300"
+        upstream.headers.get("cache-control") || "public, max-age=300",
       );
       responseHeaders.set("x-proxy-reason", "m3u8-rewrite");
 
@@ -259,7 +239,7 @@ export async function handleProxy(
   if (acceptRanges) responseHeaders.set("Accept-Ranges", acceptRanges);
   responseHeaders.set(
     "Cache-Control",
-    upstream.headers.get("cache-control") || "public, max-age=3600"
+    upstream.headers.get("cache-control") || "public, max-age=3600",
   );
 
   // Handle range synthesis (when upstream returns 200 but client requested range)
@@ -309,7 +289,7 @@ export async function handleProxy(
           "Content-Range",
           `bytes ${start}-${start + chunkSize - 1}/${
             contentLengthHeader || "*"
-          }`
+          }`,
         );
         responseHeaders.set("x-proxy-reason", "range-synthesized");
 
